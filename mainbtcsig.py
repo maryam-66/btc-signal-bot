@@ -4,15 +4,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 import requests
 import os
+import sys
 
 # اطلاعات تلگرام
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
 
-print("TOKEN:", TOKEN)
-print("CHAT_ID:", CHAT_ID_ENV)
+# بررسی اینکه هر دو مقدار گرفته شدن یا نه
+if TOKEN is None or CHAT_ID_ENV is None:
+    print("❌ خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
+    sys.exit(1)
 
-
+CHAT_ID = int(CHAT_ID_ENV)
 
 
 def send_telegram_message(message):
