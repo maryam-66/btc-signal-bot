@@ -12,3 +12,4 @@ python-bidi
 plotly
 xlsxwriter
 requests
+os
