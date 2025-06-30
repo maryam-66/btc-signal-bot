@@ -2,7 +2,7 @@ name: Run Bitcoin Signal Bot
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # هر روز ساعت ۶ صبح UTC (قابل تنظیمه)
+    - cron: '0 6 * * *'  # هر روز ساعت ۶ صبح UTC
   workflow_dispatch:     # اجازه اجرای دستی هم میده
 
 jobs:
@@ -24,4 +24,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run script
-         run: python mainbtcsig.py
+        run: python mainbtcsig.py  # 👈 این خط اصلاح شد (فاصله درست شد)
