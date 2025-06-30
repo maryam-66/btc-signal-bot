@@ -3,10 +3,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import requests
+import os
 
 # اطلاعات تلگرام
-TOKEN = '7779421326:AAGn58Jaxm4XILNZZCAdLIcy5eZDTYi52yQ'
-CHAT_ID = 201316866
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID'))
+
 
 def send_telegram_message(message):
     url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
