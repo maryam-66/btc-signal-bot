@@ -6,8 +6,12 @@ import requests
 import os
 
 # اطلاعات تلگرام
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
+
 print("TOKEN:", TOKEN)
-print("CHAT_ID:", os.getenv("TELEGRAM_CHAT_ID"))
+print("CHAT_ID:", CHAT_ID_ENV)
+
 
 
 
