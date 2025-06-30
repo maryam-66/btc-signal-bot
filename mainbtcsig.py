@@ -6,8 +6,8 @@ import requests
 import os
 
 # اطلاعات تلگرام
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID'))
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
 
 
 def send_telegram_message(message):
