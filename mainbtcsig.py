@@ -22,20 +22,20 @@ def send_telegram_message(message):
         print("خطا در ارسال پیام به تلگرام:", response.text)
 
 def analyze_btc():
-    df = yf.download("BTC-USD", period="30d", interval="1h", auto_adjust=False)
-    if 'Close' not in df.columns:
-        if 'Adj Close' in df.columns:
-            df.rename(columns={'Adj Close': 'Close'}, inplace=True)
-        else:
-            raise KeyError("ستون 'Close' یا 'Adj Close' در داده‌ها موجود نیست!")
-    df = df.dropna(subset=['Close'])
+    df = yf.download("BTC-USD", period="30d", interval="1h", auto_adjust=True)
+    # چون auto_adjust=True است، ستون Close نیست و Adj Close داریم:
+    if 'Adj Close' not in df.columns:
+        raise KeyError("ستون 'Adj Close' در داده‌ها موجود نیست!")
 
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['STD20'] = df['Close'].rolling(window=20).std()
+    df = df.dropna(subset=['Adj Close'])
+
+    # محاسبات روی 'Adj Close'
+    df['MA20'] = df['Adj Close'].rolling(window=20).mean()
+    df['STD20'] = df['Adj Close'].rolling(window=20).std()
     df['UpperBand'] = df['MA20'] + 2 * df['STD20']
     df['LowerBand'] = df['MA20'] - 2 * df['STD20']
 
-    delta = df['Close'].diff()
+    delta = df['Adj Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14).mean()
@@ -48,7 +48,7 @@ def analyze_btc():
     last = df.iloc[-1]
 
     rsi_val = last['RSI'].item()
-    close_val = last['Close'].item()
+    close_val = last['Adj Close'].item()
     lower_band_val = last['LowerBand'].item()
     upper_band_val = last['UpperBand'].item()
 
@@ -59,6 +59,7 @@ def analyze_btc():
         signal = "سیگنال فروش"
 
     return signal, close_val, rsi_val
+
 
 def get_prices_coingecko():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd"
