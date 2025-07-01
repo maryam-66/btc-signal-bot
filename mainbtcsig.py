@@ -1,60 +1,65 @@
-# تحلیل و سیگنال‌دهی حرفه‌ای برای BTC، ETH، XRP با ارسال پیام به تلگرام
-import yfinance as yf
-import pandas as pd
-import numpy as np
 import requests
 import os
 import sys
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
 
 # --- اطلاعات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
 
 if TOKEN is None or CHAT_ID_ENV is None:
-    print("❌ خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
+    print("\u274c خطا: توکن یا آیدی چت تلگرام تنظیم نشده‌اند.")
     sys.exit(1)
 
 CHAT_ID = int(CHAT_ID_ENV)
 
 def send_telegram_message(message):
-    url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
-    data = {'chat_id': CHAT_ID, 'text': message}
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message}
     requests.post(url, data=data)
 
-# --- تنظیمات ---
-symbols = {
-    'BTC-USD': 'بیت‌کوین',
-    'ETH-USD': 'اتریوم',
-    'XRP-USD': 'ریپل'
-}
+# --- دریافت قیمت و دامیننس ---
+def get_prices():
+    ids = "bitcoin,ethereum,ripple"
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd"
+    r = requests.get(url)
+    data = r.json()
+    return {
+        "BTC": data["bitcoin"]["usd"],
+        "ETH": data["ethereum"]["usd"],
+        "XRP": data["ripple"]["usd"]
+    }
 
-start_date = '2024-12-01'
-end_date = '2025-07-01'
+def get_dominance():
+    url = "https://api.coingecko.com/api/v3/global"
+    r = requests.get(url)
+    data = r.json()["data"]["market_cap_percentage"]
+    return {
+        "BTC": data.get("btc", 0),
+        "ETH": data.get("eth", 0),
+        "USDT": data.get("usdt", 0)
+    }
 
-final_messages = []
+# --- شاخص ترس و طمع ---
+def get_fear_and_greed():
+    url = "https://api.alternative.me/fng/?limit=2"
+    r = requests.get(url)
+    data = r.json()["data"]
+    today = data[0]["value"]
+    yesterday = data[1]["value"]
+    return today, yesterday
 
-for symbol, name in symbols.items():
-    df = yf.download(symbol, start=start_date, end=end_date, auto_adjust=False)
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = ['_'.join(col).strip() for col in df.columns]
-
-    if 'Close' not in df.columns:
-        close_candidates = [col for col in df.columns if 'Close' in col]
-        if close_candidates:
-            df.rename(columns={close_candidates[0]: 'Close'}, inplace=True)
-        else:
-            raise ValueError(f"ستون 'Close' در داده‌های {symbol} یافت نشد!")
-
-    df = df[['Close']].dropna()
-
-    # --- اندیکاتورها ---
-    df['7_MA'] = df['Close'].rolling(7).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['STD20'] = df['Close'].rolling(20).std()
+# --- تحلیل تکنیکال ساده برای BTC ---
+def analyze_btc():
+    df = yf.download("BTC-USD", period="30d", interval="1h")
+    df.dropna(inplace=True)
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['STD20'] = df['Close'].rolling(window=20).std()
     df['UpperBand'] = df['MA20'] + 2 * df['STD20']
     df['LowerBand'] = df['MA20'] - 2 * df['STD20']
-
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -62,47 +67,42 @@ for symbol, name in symbols.items():
     avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
-
-    # --- حذف سطرهای ناقص ---
-    df.dropna(subset=['RSI', 'UpperBand', 'LowerBand', 'Close'], inplace=True)
-
-    # --- سیگنال‌ها ---
-    df['Buy_Signal'] = (df['RSI'] < 30) & (df['Close'] < df['LowerBand'])
-    df['Sell_Signal'] = (df['RSI'] > 70) & (df['Close'] > df['UpperBand'])
-
-    # --- بررسی معاملات و سود ---
-    buy_dates = df[df['Buy_Signal']].index
-    sell_dates = df[df['Sell_Signal']].index
-    if len(buy_dates) == 0 or len(sell_dates) == 0:
-        continue
-
-    if sell_dates[0] < buy_dates[0]:
-        sell_dates = sell_dates[1:]
-    if len(buy_dates) > len(sell_dates):
-        buy_dates = buy_dates[:-1]
-
-    profits = [df.loc[sell]['Close'] - df.loc[buy]['Close'] for buy, sell in zip(buy_dates, sell_dates)]
-    total_trades = len(profits)
-    total_profit = sum(profits)
-    avg_profit = np.mean(profits)
-
-    # --- آخرین سیگنال ---
+    df.dropna(inplace=True)
     last = df.iloc[-1]
-    date_str = last.name.strftime('%Y-%m-%d')
+    signal = "❌ سیگنال خاصی نیست"
+    if last['RSI'] < 30 and last['Close'] < last['LowerBand']:
+        signal = "🟢 سیگنال خرید بیت‌کوین"
+    elif last['RSI'] > 70 and last['Close'] > last['UpperBand']:
+        signal = "🔴 سیگنال فروش بیت‌کوین"
+    return signal, last['Close'], last['RSI']
 
-    if last['Buy_Signal']:
-        signal_text = f"📈 سیگنال خرید {name} ({date_str})\nقیمت: {last['Close']:.2f} USD\n📉 RSI: {last['RSI']:.2f}"
-    elif last['Sell_Signal']:
-        signal_text = f"📉 سیگنال فروش {name} ({date_str})\nقیمت: {last['Close']:.2f} USD\n📈 RSI: {last['RSI']:.2f}"
-    else:
-        signal_text = f"ℹ️ {name} - ({date_str}) سیگنالی صادر نشد."
+# --- ساخت پیام نهایی ---
+prices = get_prices()
+dom = get_dominance()
+fear_today, fear_yesterday = get_fear_and_greed()
+signal_btc, last_price, last_rsi = analyze_btc()
 
-    summary = f"✅ {name}\nتعداد معاملات: {total_trades}\nسود کل: {total_profit:.2f} USD\nمیانگین سود: {avg_profit:.2f} USD"
-    final_messages.append(signal_text + "\n" + summary)
+msg = f"""
+📊 گزارش لحظه‌ای بازار کریپتو:
 
-# --- ارسال نهایی به تلگرام ---
-if final_messages:
-    final_report = '\n\n'.join(final_messages)
-    send_telegram_message(final_report)
-else:
-    send_telegram_message("ℹ️ هیچ سیگنالی برای هیچ‌کدام از رمزارزها صادر نشد.")
+💰 قیمت‌ها:
+- بیت‌کوین: ${prices['BTC']:,}
+- اتریوم: ${prices['ETH']:,}
+- ریپل: ${prices['XRP']:,}
+
+🔎 دامیننس:
+- BTC: {dom['BTC']:.2f}%
+- ETH: {dom['ETH']:.2f}%
+- USDT: {dom['USDT']:.2f}%
+
+😱 احساسات بازار:
+- امروز: {fear_today} /100
+- دیروز: {fear_yesterday} /100
+
+📈 تحلیل تکنیکال BTC:
+- قیمت فعلی: ${last_price:.2f}
+- RSI: {last_rsi:.2f}
+- {signal_btc}
+"""
+
+send_telegram_message(msg)
