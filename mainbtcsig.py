@@ -5,7 +5,6 @@ import requests
 import os
 import sys
 
-# --- تنظیمات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -22,12 +21,15 @@ def send_telegram_message(message):
     if not response.ok:
         print("خطا در ارسال پیام به تلگرام:", response.text)
 
-# --- تابع تحلیل بیت‌کوین با RSI و Bollinger Bands ---
 def analyze_btc():
-    df = yf.download("BTC-USD", period="30d", interval="1h", auto_adjust=True)
+    df = yf.download("BTC-USD", period="30d", interval="1h", auto_adjust=False)
+    if 'Close' not in df.columns:
+        if 'Adj Close' in df.columns:
+            df.rename(columns={'Adj Close': 'Close'}, inplace=True)
+        else:
+            raise KeyError("ستون 'Close' یا 'Adj Close' در داده‌ها موجود نیست!")
     df = df.dropna(subset=['Close'])
-    
-    # محاسبه اندیکاتورها
+
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['STD20'] = df['Close'].rolling(window=20).std()
     df['UpperBand'] = df['MA20'] + 2 * df['STD20']
@@ -40,12 +42,11 @@ def analyze_btc():
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
-    
+
     df.dropna(inplace=True)
 
     last = df.iloc[-1]
 
-    # دقت کن از .item() استفاده کنیم تا مقدار اسکالر بدست بیاد و شرط درست کار کنه
     rsi_val = last['RSI'].item()
     close_val = last['Close'].item()
     lower_band_val = last['LowerBand'].item()
@@ -59,7 +60,6 @@ def analyze_btc():
 
     return signal, close_val, rsi_val
 
-# --- دریافت قیمت لحظه‌ای از CoinGecko ---
 def get_prices_coingecko():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd"
     response = requests.get(url)
@@ -69,7 +69,6 @@ def get_prices_coingecko():
     xrp_price = data['ripple']['usd']
     return btc_price, eth_price, xrp_price
 
-# --- دریافت دامیننس از CoinGecko ---
 def get_dominance_coingecko():
     url = "https://api.coingecko.com/api/v3/global"
     response = requests.get(url)
@@ -80,7 +79,6 @@ def get_dominance_coingecko():
     usdt_dom = dominance.get('usdt', None)
     return btc_dom, eth_dom, usdt_dom
 
-# --- دریافت شاخص ترس و طمع ---
 def get_fear_and_greed_index():
     url = "https://api.alternative.me/fng/"
     response = requests.get(url)
