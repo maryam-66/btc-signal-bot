@@ -1,8 +1,6 @@
-# تحلیل و سیگنال‌دهی حرفه‌ای برای BTC، ETH، XRP با ارسال پیام به تلگرام
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import requests
 import os
 import sys
@@ -10,6 +8,7 @@ import sys
 # --- اطلاعات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
+NEWSAPI_KEY = os.getenv("1fbbb3b298474644b2187f4a534484d4")  # کلید API اخبار
 
 if TOKEN is None or CHAT_ID_ENV is None:
     print("\u274c خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
@@ -20,9 +19,55 @@ CHAT_ID = int(CHAT_ID_ENV)
 def send_telegram_message(message):
     url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
     data = {'chat_id': CHAT_ID, 'text': message}
-    requests.post(url, data=data)
+    response = requests.post(url, data=data)
+    if not response.ok:
+        print("⚠️ ارسال پیام تلگرام ناموفق بود:", response.text)
 
-# --- تنظیمات کلی ---
+# --- دریافت اخبار مهم ---
+def get_latest_news():
+    if not NEWSAPI_KEY:
+        return "⚠️ کلید API اخبار تنظیم نشده است."
+    url = (f'https://newsapi.org/v2/everything?'
+           'q=bitcoin OR ethereum OR ripple OR crypto OR "federal reserve"&'
+           'language=en&sortBy=publishedAt&pageSize=3&apiKey={api_key}').format(api_key=NEWSAPI_KEY)
+    response = requests.get(url)
+    if response.status_code == 200:
+        articles = response.json()['articles']
+        if not articles:
+            return "⚠️ خبری یافت نشد."
+        news_texts = [f"- {a['title']} ({a['source']['name']})" for a in articles]
+        return "\n".join(news_texts)
+    else:
+        return "⚠️ خطا در دریافت اخبار"
+
+# --- شاخص ترس و طمع ---
+def get_fear_greed_index():
+    url = 'https://api.alternative.me/fng/'
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        value = data['data'][0]['value']
+        value_classification = data['data'][0]['value_classification']
+        return f"📊 شاخص ترس و طمع: {value} ({value_classification})"
+    else:
+        return "⚠️ خطا در دریافت شاخص ترس و طمع"
+
+# --- روند کلی بازار ---
+def get_market_overview():
+    url = "https://api.coingecko.com/api/v3/global"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()['data']
+        market_cap = data['total_market_cap']['usd']
+        btc_dominance = data['market_cap_percentage']['btc']
+        eth_dominance = data['market_cap_percentage']['eth']
+        return (f"🌐 مارکت کپ کل: {market_cap/1e9:.2f} میلیارد دلار\n"
+                f"🔶 دامیننس BTC: {btc_dominance:.2f}%\n"
+                f"🔷 دامیننس ETH: {eth_dominance:.2f}%")
+    else:
+        return "⚠️ خطا در دریافت اطلاعات مارکت"
+
+# --- تنظیمات کلی تحلیل تکنیکال ---
 symbols = {
     'BTC-USD': 'بیت‌کوین',
     'ETH-USD': 'اتریوم',
@@ -45,7 +90,8 @@ for symbol, name in symbols.items():
         if close_candidates:
             df.rename(columns={close_candidates[0]: 'Close'}, inplace=True)
         else:
-            raise ValueError(f"ستون 'Close' در داده‌های {symbol} یافت نشد!")
+            print(f"⚠️ ستون 'Close' در داده‌های {symbol} یافت نشد!")
+            continue
 
     df = df[['Close']].dropna()
 
@@ -88,16 +134,24 @@ for symbol, name in symbols.items():
     avg_profit = np.mean(profits)
 
     last = df.iloc[-1]
+    date_str = last.name.strftime('%Y-%m-%d')
     if last['Buy_Signal']:
-        signal_text = f"\ud83d\udcc8 سیگنال خرید {name} ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n\ud83d\udcc9 RSI: {last['RSI']:.2f}"
+        signal_text = f"📈 سیگنال خرید {name} ({date_str})\nقیمت: {last['Close']:.2f} USD\n📊 RSI: {last['RSI']:.2f}"
     elif last['Sell_Signal']:
-        signal_text = f"\ud83d\udcc9 سیگنال فروش {name} ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n\ud83d\udcc8 RSI: {last['RSI']:.2f}"
+        signal_text = f"📉 سیگنال فروش {name} ({date_str})\nقیمت: {last['Close']:.2f} USD\n📊 RSI: {last['RSI']:.2f}"
     else:
-        signal_text = f"ℹ️ {name} - ({last.name.date()}) هیچ سیگنالی صادر نشد."
+        signal_text = f"ℹ️ {name} - ({date_str}) هیچ سیگنالی صادر نشد."
 
     summary = f"✅ {name}\nمعاملات: {total_trades}\nسود کل: {total_profit:.2f} USD\nمیانگین سود هر معامله: {avg_profit:.2f} USD"
     final_messages.append(signal_text + "\n" + summary)
 
+# --- دریافت داده‌های اضافی ---
+news = get_latest_news()
+fear_greed = get_fear_greed_index()
+market_overview = get_market_overview()
+
 # --- ارسال نهایی ---
 final_report = '\n\n'.join(final_messages)
-send_telegram_message(final_report)
+extra_info = f"\n\n📰 اخبار مهم:\n{news}\n\n{fear_greed}\n\n{market_overview}"
+
+send_telegram_message(final_report + extra_info)
