@@ -1,3 +1,4 @@
+# تحلیل و سیگنال‌دهی حرفه‌ای برای BTC، ETH، XRP با ارسال پیام به تلگرام
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -6,133 +7,97 @@ import requests
 import os
 import sys
 
-# اطلاعات تلگرام
+# --- اطلاعات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
 
-# بررسی اینکه هر دو مقدار گرفته شدن یا نه
 if TOKEN is None or CHAT_ID_ENV is None:
-    print("❌ خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
+    print("\u274c خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
     sys.exit(1)
 
 CHAT_ID = int(CHAT_ID_ENV)
-
 
 def send_telegram_message(message):
     url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
     data = {'chat_id': CHAT_ID, 'text': message}
     requests.post(url, data=data)
 
+# --- تنظیمات کلی ---
+symbols = {
+    'BTC-USD': 'بیت‌کوین',
+    'ETH-USD': 'اتریوم',
+    'XRP-USD': 'ریپل'
+}
 
-# 1. دانلود داده بیت‌کوین (با auto_adjust=False برای جلوگیری از ساختار پیچیده)
-btc = yf.download('BTC-USD', start='2024-12-01', end='2025-07-01', auto_adjust=False)
+start_date = '2024-12-01'
+end_date = '2025-07-01'
 
-# اگر MultiIndex داشت، آن را فلت کن
-if isinstance(btc.columns, pd.MultiIndex):
-    btc.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in btc.columns]
+final_messages = []
 
-# بررسی اینکه ستون Close وجود دارد یا نه
-if 'Close' not in btc.columns:
-    close_candidates = [col for col in btc.columns if 'Close' in col]
-    if close_candidates:
-        close_col = close_candidates[0]
-        btc.rename(columns={close_col: 'Close'}, inplace=True)
+for symbol, name in symbols.items():
+    df = yf.download(symbol, start=start_date, end=end_date, auto_adjust=False)
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).strip() for col in df.columns]
+
+    if 'Close' not in df.columns:
+        close_candidates = [col for col in df.columns if 'Close' in col]
+        if close_candidates:
+            df.rename(columns={close_candidates[0]: 'Close'}, inplace=True)
+        else:
+            raise ValueError(f"ستون 'Close' در داده‌های {symbol} یافت نشد!")
+
+    df = df[['Close']].dropna()
+
+    # اندیکاتورها
+    df['7_MA'] = df['Close'].rolling(7).mean()
+    df['MA20'] = df['Close'].rolling(20).mean()
+    df['STD20'] = df['Close'].rolling(20).std()
+    df['UpperBand'] = df['MA20'] + 2 * df['STD20']
+    df['LowerBand'] = df['MA20'] - 2 * df['STD20']
+
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    df.dropna(subset=['RSI', 'UpperBand', 'LowerBand'], inplace=True)
+
+    # سیگنال‌ها
+    df['Buy_Signal'] = (df['RSI'] < 30) & (df['Close'] < df['LowerBand'])
+    df['Sell_Signal'] = (df['RSI'] > 70) & (df['Close'] > df['UpperBand'])
+
+    # محاسبه سود و زیان
+    buy_dates = df[df['Buy_Signal']].index
+    sell_dates = df[df['Sell_Signal']].index
+    if len(buy_dates) == 0 or len(sell_dates) == 0:
+        continue
+
+    if sell_dates[0] < buy_dates[0]:
+        sell_dates = sell_dates[1:]
+    if len(buy_dates) > len(sell_dates):
+        buy_dates = buy_dates[:-1]
+
+    profits = [df.loc[sell]['Close'] - df.loc[buy]['Close'] for buy, sell in zip(buy_dates, sell_dates)]
+
+    total_trades = len(profits)
+    total_profit = sum(profits)
+    avg_profit = np.mean(profits)
+
+    last = df.iloc[-1]
+    if last['Buy_Signal']:
+        signal_text = f"\ud83d\udcc8 سیگنال خرید {name} ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n\ud83d\udcc9 RSI: {last['RSI']:.2f}"
+    elif last['Sell_Signal']:
+        signal_text = f"\ud83d\udcc9 سیگنال فروش {name} ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n\ud83d\udcc8 RSI: {last['RSI']:.2f}"
     else:
-        raise ValueError("ستون 'Close' در داده‌های دریافتی یافت نشد!")
+        signal_text = f"ℹ️ {name} - ({last.name.date()}) هیچ سیگنالی صادر نشد."
 
-# فقط ستون Close
-btc = btc[['Close']]
-btc.dropna(inplace=True)
+    summary = f"✅ {name}\nمعاملات: {total_trades}\nسود کل: {total_profit:.2f} USD\nمیانگین سود هر معامله: {avg_profit:.2f} USD"
+    final_messages.append(signal_text + "\n" + summary)
 
-# 2. محاسبه اندیکاتورها
-btc['7_MA'] = btc['Close'].rolling(window=7).mean()
-btc['MA20'] = btc['Close'].rolling(window=20).mean()
-btc['STD20'] = btc['Close'].rolling(window=20).std()
-btc['UpperBand'] = btc['MA20'] + 2 * btc['STD20']
-btc['LowerBand'] = btc['MA20'] - 2 * btc['STD20']
-
-# RSI
-delta = btc['Close'].diff()
-gain = delta.clip(lower=0)
-loss = -delta.clip(upper=0)
-avg_gain = gain.rolling(window=14).mean()
-avg_loss = loss.rolling(window=14).mean()
-rs = avg_gain / avg_loss
-btc['RSI'] = 100 - (100 / (1 + rs))
-
-# حذف ردیف‌های ناقص
-btc.dropna(subset=['RSI', 'UpperBand', 'LowerBand'], inplace=True)
-
-# 3. سیگنال‌ها
-btc['Buy_Signal'] = (btc['RSI'] < 30) & (btc['Close'] < btc['LowerBand'])
-btc['Sell_Signal'] = (btc['RSI'] > 70) & (btc['Close'] > btc['UpperBand'])
-
-# 4. نمودار
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
-
-# قیمت و میانگین‌ها
-ax1.plot(btc.index, btc['Close'], label='BTC Price', marker='o', markersize=4, linewidth=1.2)
-ax1.plot(btc.index, btc['7_MA'], label='7-day MA', linestyle='--', color='orange')
-ax1.plot(btc.index, btc['UpperBand'], label='Bollinger Upper', linestyle='--', color='green')
-ax1.plot(btc.index, btc['LowerBand'], label='Bollinger Lower', linestyle='--', color='red')
-
-# سیگنال‌ها
-ax1.plot(btc[btc['Buy_Signal']].index, btc[btc['Buy_Signal']]['Close'], '^', color='green', label='Buy Signal', markersize=10)
-ax1.plot(btc[btc['Sell_Signal']].index, btc[btc['Sell_Signal']]['Close'], 'v', color='red', label='Sell Signal', markersize=10)
-
-ax1.set_title('BTC Technical Analysis', fontsize=14)
-ax1.set_ylabel('Price (USD)')
-ax1.grid(True)
-ax1.legend()
-
-# RSI chart
-ax2.plot(btc.index, btc['RSI'], label='RSI', color='purple')
-ax2.axhline(70, color='red', linestyle='--', linewidth=1)
-ax2.axhline(30, color='green', linestyle='--', linewidth=1)
-ax2.set_title('RSI Indicator', fontsize=14)
-ax2.set_ylabel('RSI')
-ax2.set_ylim(0, 100)
-ax2.grid(True)
-ax2.legend()
-
-plt.xlabel('Date')
-plt.tight_layout()
-plt.show()
-
-# 1. گرفتن فقط تاریخ‌های سیگنال خرید و فروش
-buy_dates = btc[btc['Buy_Signal']].index
-sell_dates = btc[btc['Sell_Signal']].index
-
-# 2. مطمئن می‌شیم اولین سیگنال خرید هست، آخرین سیگنال فروش
-if sell_dates[0] < buy_dates[0]:
-    sell_dates = sell_dates[1:]
-if len(buy_dates) > len(sell_dates):
-    buy_dates = buy_dates[:-1]
-
-# 3. محاسبه سود و زیان
-profits = []
-for buy_date, sell_date in zip(buy_dates, sell_dates):
-    buy_price = btc.loc[buy_date]['Close']
-    sell_price = btc.loc[sell_date]['Close']
-    profit = sell_price - buy_price
-    profits.append(profit)
-
-# 4. نمایش نتیجه
-total_trades = len(profits)
-total_profit = sum(profits)
-avg_profit = np.mean(profits)
-
-print(f'✅ Total Trades: {total_trades}')
-print(f'💰 Total Profit: {total_profit:.2f} USD')
-print(f'📈 Average Profit per Trade: {avg_profit:.2f} USD')
-
-# 5. ارسال پیام تلگرام اگر سیگنال جدید وجود داشت
-last = btc.iloc[-1]
-
-if last['Buy_Signal']:
-    send_telegram_message(f"📈 سیگنال خرید بیت‌کوین ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n📉 RSI: {last['RSI']:.2f}")
-elif last['Sell_Signal']:
-    send_telegram_message(f"📉 سیگنال فروش بیت‌کوین ({last.name.date()})\nقیمت: {last['Close']:.2f} USD\n📈 RSI: {last['RSI']:.2f}")
-else:
-    send_telegram_message(f"ℹ️ در تاریخ {last.name.date()} هیچ سیگنالی صادر نشد.")
-
+# --- ارسال نهایی ---
+final_report = '\n\n'.join(final_messages)
+send_telegram_message(final_report)
