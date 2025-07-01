@@ -2,118 +2,165 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import requests
+from bs4 import BeautifulSoup
+import datetime
 import os
 import sys
 
+# --- تنظیمات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
 
-if TOKEN is None or CHAT_ID_ENV is None:
-    print("❌ خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
+if not TOKEN or not CHAT_ID_ENV:
+    print("❌ خطا: توکن یا آیدی چت تلگرام تنظیم نشده‌اند.")
     sys.exit(1)
 
 CHAT_ID = int(CHAT_ID_ENV)
 
-def send_telegram_message(message):
-    url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
-    data = {'chat_id': CHAT_ID, 'text': message, 'parse_mode': 'HTML'}
-    response = requests.post(url, data=data)
-    if not response.ok:
-        print("خطا در ارسال پیام به تلگرام:", response.text)
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
+    resp = requests.post(url, data=data)
+    if not resp.ok:
+        print(f"❌ خطا در ارسال پیام تلگرام: {resp.text}")
 
-def analyze_btc():
-    df = yf.download("BTC-USD", period="30d", interval="1h", auto_adjust=True)
-    # چون auto_adjust=True است، ستون Close نیست و Adj Close داریم:
-    if 'Adj Close' not in df.columns:
-        raise KeyError("ستون 'Adj Close' در داده‌ها موجود نیست!")
+# --- دانلود دیتا با YFinance و پردازش ---
+def download_and_process(symbol):
+    df = yf.download(symbol, period="30d", interval="1h", auto_adjust=True)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(col).strip() for col in df.columns]
 
-    df = df.dropna(subset=['Adj Close'])
+    close_cols = [col for col in df.columns if col.startswith('Close')]
+    if not close_cols:
+        raise KeyError(f"ستون Close برای {symbol} پیدا نشد!")
+    price_col = close_cols[0]
 
-    # محاسبات روی 'Adj Close'
-    df['MA20'] = df['Adj Close'].rolling(window=20).mean()
-    df['STD20'] = df['Adj Close'].rolling(window=20).std()
+    df = df.dropna(subset=[price_col])
+
+    # اندیکاتورها
+    df['MA20'] = df[price_col].rolling(20).mean()
+    df['STD20'] = df[price_col].rolling(20).std()
     df['UpperBand'] = df['MA20'] + 2 * df['STD20']
     df['LowerBand'] = df['MA20'] - 2 * df['STD20']
 
-    delta = df['Adj Close'].diff()
+    delta = df[price_col].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
     df.dropna(inplace=True)
+    return df, price_col
 
+def analyze_signal(df, price_col, name):
     last = df.iloc[-1]
+    rsi = last['RSI']
+    close = last[price_col]
+    lower = last['LowerBand']
+    upper = last['UpperBand']
 
-    rsi_val = last['RSI'].item()
-    close_val = last['Adj Close'].item()
-    lower_band_val = last['LowerBand'].item()
-    upper_band_val = last['UpperBand'].item()
+    signal = None
+    if (rsi < 30) and (close < lower):
+        signal = f"📈 سیگنال خرید {name}"
+    elif (rsi > 70) and (close > upper):
+        signal = f"📉 سیگنال فروش {name}"
+    else:
+        signal = f"ℹ️ هیچ سیگنالی برای {name} نیست"
 
-    signal = "هیچ سیگنالی"
-    if (rsi_val < 30) and (close_val < lower_band_val):
-        signal = "سیگنال خرید"
-    elif (rsi_val > 70) and (close_val > upper_band_val):
-        signal = "سیگنال فروش"
+    return signal, close, rsi
 
-    return signal, close_val, rsi_val
-
-
-def get_prices_coingecko():
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd"
-    response = requests.get(url)
-    data = response.json()
-    btc_price = data['bitcoin']['usd']
-    eth_price = data['ethereum']['usd']
-    xrp_price = data['ripple']['usd']
-    return btc_price, eth_price, xrp_price
-
-def get_dominance_coingecko():
+# --- دریافت دامیننس از CoinGecko ---
+def get_dominance():
     url = "https://api.coingecko.com/api/v3/global"
-    response = requests.get(url)
-    data = response.json()
-    dominance = data['data']['market_cap_percentage']
-    btc_dom = dominance.get('btc', None)
-    eth_dom = dominance.get('eth', None)
-    usdt_dom = dominance.get('usdt', None)
+    resp = requests.get(url)
+    data = resp.json()
+    dom = data.get("data", {}).get("market_cap_percentage", {})
+    btc_dom = dom.get("btc", None)
+    eth_dom = dom.get("eth", None)
+    usdt_dom = dom.get("usdt", None)
     return btc_dom, eth_dom, usdt_dom
 
-def get_fear_and_greed_index():
+# --- دریافت Fear & Greed Index ---
+def get_fear_greed():
     url = "https://api.alternative.me/fng/"
-    response = requests.get(url)
-    data = response.json()
-    value = data['data'][0]['value']
-    value_classification = data['data'][0]['value_classification']
-    return value, value_classification
+    resp = requests.get(url)
+    data = resp.json()
+    if "data" in data and len(data["data"]) > 0:
+        val = data["data"][0]["value"]
+        classification = data["data"][0]["value_classification"]
+        return val, classification
+    return None, None
+
+# --- دریافت خبرهای کلان از investing.com (scraping ساده) ---
+def get_economic_news():
+    url = "https://www.investing.com/economic-calendar/"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        resp = requests.get(url, headers=headers)
+        soup = BeautifulSoup(resp.content, "html.parser")
+        news_list = []
+        # بخش اخبار اصلی در جدول
+        rows = soup.select("table.ecEventsTable tbody tr")
+        for r in rows[:5]:  # ۵ خبر اول
+            time = r.select_one("td.first.left.time")
+            title = r.select_one("td.event")
+            impact = r.select_one("td.sentiment")
+            if time and title and impact:
+                time_text = time.text.strip()
+                title_text = title.text.strip()
+                impact_text = impact.text.strip()
+                news_list.append(f"{time_text} | {impact_text} | {title_text}")
+        return news_list
+    except Exception as e:
+        print("⚠️ خطا در دریافت اخبار کلان:", e)
+        return []
+
+# --- ساخت پیام نهایی ---
+def build_message(signals, dominances, fear_greed_val, fear_greed_class, news_list):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    msg = f"📊 گزارش تحلیل رمزارزها - {now}\n\n"
+
+    for sym, sig, price, rsi in signals:
+        msg += f"{sig}\nقیمت: {price:.2f} USD\nRSI: {rsi:.2f}\n\n"
+
+    msg += f"🔹 دامیننس‌ها:\nBTC: {dominances[0]:.2f}% | ETH: {dominances[1]:.2f}% | USDT: {dominances[2]:.2f}%\n\n"
+    msg += f"😨 شاخص ترس و طمع: {fear_greed_val} ({fear_greed_class})\n\n"
+
+    msg += "📰 اخبار کلان اقتصادی:\n"
+    if news_list:
+        for news in news_list:
+            msg += f"- {news}\n"
+    else:
+        msg += "اخباری یافت نشد.\n"
+
+    return msg
+
+# --- برنامه اصلی ---
+def main():
+    symbols = {
+        "BTC-USD": "بیت‌کوین",
+        "ETH-USD": "اتریوم",
+        "XRP-USD": "ریپل"
+    }
+
+    signals = []
+    for sym, name in symbols.items():
+        try:
+            df, price_col = download_and_process(sym)
+            sig, price, rsi = analyze_signal(df, price_col, name)
+            signals.append((sym, sig, price, rsi))
+        except Exception as e:
+            print(f"⚠️ خطا در تحلیل {name}: {e}")
+
+    dominances = get_dominance()
+    fear_greed_val, fear_greed_class = get_fear_greed()
+    news_list = get_economic_news()
+
+    message = build_message(signals, dominances, fear_greed_val, fear_greed_class, news_list)
+    send_telegram_message(message)
+    print("✅ پیام به تلگرام ارسال شد.")
 
 if __name__ == "__main__":
-    signal_btc, last_price, last_rsi = analyze_btc()
-    btc_price, eth_price, xrp_price = get_prices_coingecko()
-    btc_dom, eth_dom, usdt_dom = get_dominance_coingecko()
-    fear_value, fear_status = get_fear_and_greed_index()
-
-    message = f"""
-📊 <b>تحلیل لحظه‌ای بیت‌کوین (BTC)</b>:
-سیگنال: <b>{signal_btc}</b>
-قیمت لحظه‌ای: {last_price:.2f} USD
-RSI: {last_rsi:.2f}
-
-💰 <b>قیمت‌های لحظه‌ای</b>:
-BTC: {btc_price} USD
-ETH: {eth_price} USD
-XRP: {xrp_price} USD
-
-📈 <b>دامیننس بازار</b>:
-BTC Dominance: {btc_dom:.2f}%
-ETH Dominance: {eth_dom:.2f}%
-USDT Dominance: {usdt_dom:.2f}%
-
-😨 <b>شاخص ترس و طمع</b>:
-مقدار: {fear_value}
-وضعیت: {fear_status}
-    """
-
-    print(message)
-    send_telegram_message(message)
+    main()
