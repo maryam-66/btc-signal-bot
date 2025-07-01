@@ -8,73 +8,76 @@ from datetime import datetime
 
 # --- اطلاعات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")  # کلید API اخبار
+CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
-if not TOKEN or not CHAT_ID:
-    print("❌ توکن یا آیدی چت تنظیم نشده‌اند!")
+if not TOKEN or not CHAT_ID_ENV:
+    print("❌ خطا: توکن یا آیدی چت تلگرام تنظیم نشده‌اند.")
     sys.exit(1)
 
-CHAT_ID = int(CHAT_ID)
+CHAT_ID = int(CHAT_ID_ENV)
 
 def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    res = requests.post(url, data=data)
-    if not res.ok:
-        print("❌ ارسال پیام ناموفق:", res.text)
+    url = f'https://api.telegram.org/bot{TOKEN}/sendMessage'
+    data = {'chat_id': CHAT_ID, 'text': message}
+    response = requests.post(url, data=data)
+    if not response.ok:
+        print("⚠️ ارسال پیام تلگرام ناموفق بود:", response.text)
 
-# --- دریافت قیمت لحظه‌ای و دامیننس ---
-def get_live_prices_and_dominance():
-    url = "https://api.coingecko.com/api/v3/global"
-    global_res = requests.get(url)
-    price_url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd"
-    price_res = requests.get(price_url)
-
-    if global_res.ok and price_res.ok:
-        market_data = global_res.json()["data"]
-        prices = price_res.json()
-        btc = prices["bitcoin"]["usd"]
-        eth = prices["ethereum"]["usd"]
-        xrp = prices["ripple"]["usd"]
-        btc_dom = market_data["market_cap_percentage"]["btc"]
-        eth_dom = market_data["market_cap_percentage"]["eth"]
-        market_cap = market_data["total_market_cap"]["usd"]
-
-        info = (f"💰 قیمت لحظه‌ای:\n"
-                f"BTC: ${btc:,}\nETH: ${eth:,}\nXRP: ${xrp:.4f}\n\n"
-                f"🌐 مارکت کپ کل: {market_cap/1e9:.2f} میلیارد دلار\n"
-                f"🔶 دامیننس BTC: {btc_dom:.2f}%\n"
-                f"🔷 دامیننس ETH: {eth_dom:.2f}%")
-        return info
-    return "⚠️ خطا در دریافت اطلاعات مارکت و قیمت‌ها"
-
-# --- دریافت شاخص ترس و طمع ---
-def get_fear_greed_index():
-    url = 'https://api.alternative.me/fng/'
-    res = requests.get(url)
-    if res.ok:
-        data = res.json()['data'][0]
-        return f"📊 شاخص ترس و طمع: {data['value']} ({data['value_classification']})"
-    return "⚠️ خطا در دریافت شاخص ترس و طمع"
-
-# --- دریافت اخبار اقتصادی مهم ---
+# --- دریافت اخبار مهم ---
 def get_latest_news():
     if not NEWSAPI_KEY:
         return "⚠️ کلید API اخبار تنظیم نشده است."
-    
-    keywords = "bitcoin OR ethereum OR ripple OR crypto OR 'federal reserve' OR inflation OR interest rate"
-    url = (
-        f"https://newsapi.org/v2/everything?"
-        f"q={keywords}&language=en&sortBy=publishedAt&pageSize=3&apiKey={NEWSAPI_KEY}"
-    )
-    res = requests.get(url)
-    if res.ok:
-        articles = res.json().get("articles", [])
+    url = (f'https://newsapi.org/v2/everything?'
+           'q=crypto OR bitcoin OR ethereum OR ripple OR "federal reserve"&'
+           'language=en&sortBy=publishedAt&pageSize=3&apiKey={api_key}').format(api_key=NEWSAPI_KEY)
+    response = requests.get(url)
+    if response.status_code == 200:
+        articles = response.json().get('articles', [])
         if not articles:
             return "⚠️ خبری یافت نشد."
-        return "\n".join([f"- {a['title']} ({a['source']['name']})" for a in articles])
-    return "⚠️ خطا در دریافت اخبار"
+        news_texts = [f"- {a['title']} ({a['source']['name']})" for a in articles]
+        return "\n".join(news_texts)
+    else:
+        return "⚠️ خطا در دریافت اخبار"
+
+# --- شاخص ترس و طمع ---
+def get_fear_greed_index():
+    url = 'https://api.alternative.me/fng/'
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        value = data['data'][0]['value']
+        classification = data['data'][0]['value_classification']
+        return f"📊 شاخص ترس و طمع: {value} ({classification})"
+    else:
+        return "⚠️ خطا در دریافت شاخص ترس و طمع"
+
+# --- روند کلی بازار + قیمت لحظه‌ای ---
+def get_market_overview_and_prices():
+    try:
+        res = requests.get("https://api.coingecko.com/api/v3/global")
+        prices = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,ripple&vs_currencies=usd")
+        if res.status_code == 200 and prices.status_code == 200:
+            global_data = res.json()['data']
+            price_data = prices.json()
+            market_cap = global_data['total_market_cap']['usd'] / 1e9
+            btc_dominance = global_data['market_cap_percentage']['btc']
+            eth_dominance = global_data['market_cap_percentage']['eth']
+            btc_price = price_data['bitcoin']['usd']
+            eth_price = price_data['ethereum']['usd']
+            xrp_price = price_data['ripple']['usd']
+            return (f"💰 قیمت لحظه‌ای:\n"
+                    f"- بیت‌کوین: ${btc_price:,.2f}\n"
+                    f"- اتریوم: ${eth_price:,.2f}\n"
+                    f"- ریپل: ${xrp_price:,.2f}\n\n"
+                    f"🌐 مارکت کپ کل: {market_cap:.2f} میلیارد دلار\n"
+                    f"🔶 دامیننس BTC: {btc_dominance:.2f}%\n"
+                    f"🔷 دامیننس ETH: {eth_dominance:.2f}%")
+        else:
+            return "⚠️ خطا در دریافت قیمت یا وضعیت بازار"
+    except Exception as e:
+        return f"⚠️ خطا: {str(e)}"
 
 # --- تحلیل تکنیکال و سیگنال‌دهی ---
 symbols = {
@@ -83,17 +86,16 @@ symbols = {
     'XRP-USD': 'ریپل'
 }
 
-today = datetime.utcnow().strftime('%Y-%m-%d')
 final_messages = []
 
 for symbol, name in symbols.items():
     df = yf.download(symbol, period='30d', interval='1h')  # تحلیل کوتاه‌مدت
-    if df.empty or 'Close' not in df:
+
+    if df.empty or 'Close' not in df.columns:
         continue
 
-    df = df[['Close']].dropna()
-
-    # اندیکاتورها
+    df = df[['Close']].copy()
+    df['7_MA'] = df['Close'].rolling(7).mean()
     df['MA20'] = df['Close'].rolling(20).mean()
     df['STD20'] = df['Close'].rolling(20).std()
     df['UpperBand'] = df['MA20'] + 2 * df['STD20']
@@ -109,24 +111,39 @@ for symbol, name in symbols.items():
 
     df.dropna(inplace=True)
 
+    if df.empty or 'RSI' not in df.columns:
+        continue
+
+    # سیگنال‌ها
+    df['Buy_Signal'] = (df['RSI'] < 30) & (df['Close'] < df['LowerBand'])
+    df['Sell_Signal'] = (df['RSI'] > 70) & (df['Close'] > df['UpperBand'])
+
     last = df.iloc[-1]
+
+    close = float(last['Close'])
+    rsi = float(last['RSI'])
+    lower = float(last['LowerBand'])
+    upper = float(last['UpperBand'])
+
     date_str = last.name.strftime('%Y-%m-%d %H:%M')
+
     signal = ""
-    if last['RSI'] < 30 and last['Close'] < last['LowerBand']:
-        signal = f"📈 سیگنال خرید {name} ({date_str})\nقیمت: ${last['Close']:.2f}\n📉 RSI: {last['RSI']:.2f}"
-    elif last['RSI'] > 70 and last['Close'] > last['UpperBand']:
-        signal = f"📉 سیگنال فروش {name} ({date_str})\nقیمت: ${last['Close']:.2f}\n📈 RSI: {last['RSI']:.2f}"
+    if rsi < 30 and close < lower:
+        signal = f"📈 سیگنال خرید {name} ({date_str})\nقیمت: ${close:.2f}\n📉 RSI: {rsi:.2f}"
+    elif rsi > 70 and close > upper:
+        signal = f"📉 سیگنال فروش {name} ({date_str})\nقیمت: ${close:.2f}\n📈 RSI: {rsi:.2f}"
     else:
         signal = f"ℹ️ {name} ({date_str}) - هیچ سیگنالی صادر نشد."
 
     final_messages.append(signal)
 
-# --- داده‌های تکمیلی ---
-market_info = get_live_prices_and_dominance()
-fear_greed = get_fear_greed_index()
+# --- بخش‌های نهایی ---
 news = get_latest_news()
+fear_greed = get_fear_greed_index()
+market_data = get_market_overview_and_prices()
 
-# --- ارسال گزارش ---
-report = "\n\n".join(final_messages)
-final_text = f"{report}\n\n{market_info}\n\n{fear_greed}\n\n📰 اخبار اقتصادی:\n{news}"
-send_telegram_message(final_text)
+final_report = '\n\n'.join(final_messages)
+extra_info = f"\n\n📰 اخبار مهم:\n{news}\n\n{fear_greed}\n\n{market_data}"
+
+# ارسال به تلگرام
+send_telegram_message(final_report + extra_info)
