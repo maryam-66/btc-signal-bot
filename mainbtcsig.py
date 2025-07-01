@@ -8,7 +8,7 @@ import sys
 # --- اطلاعات تلگرام ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID_ENV = os.getenv("TELEGRAM_CHAT_ID")
-NEWSAPI_KEY = os.getenv("1fbbb3b298474644b2187f4a534484d4")  # کلید API اخبار
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")  # کلید API اخبار
 
 if TOKEN is None or CHAT_ID_ENV is None:
     print("\u274c خطا: توکن یا آیدی چت تنظیم نشده‌اند!")
